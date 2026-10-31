@@ -1,9 +1,13 @@
-# Builds a self-contained PrusaSlicer binary for Linux.
+# Builds a PrusaSlicer binary for Linux that can be called from a script, a service
+# or a container.
 #
-# The result is not meant to run as a container. Copy the binary and the
-# resources directory out of the image and use them on the host:
+#   docker build --build-arg GUI=OFF -t prusaslicer-cli:2.9.6 .
+#   docker build --build-arg GUI=ON  -t prusaslicer-gui:2.9.6 .
 #
-#   id=$(docker create prusaslicer-builder:2.9.6)
+# The image is a build environment, not something to run. Copy the binary and the
+# resources directory out of it:
+#
+#   id=$(docker create prusaslicer-cli:2.9.6)
 #   docker cp "$id:/src/PrusaSlicer/build/src/prusa-slicer" ./prusa-slicer
 #   docker cp "$id:/src/PrusaSlicer/resources" ./resources
 #   docker rm "$id"
@@ -14,6 +18,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The dependency build extracts archives with non-ASCII names.
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
+
+ARG PRUSASLICER_TAG=version_2.9.6
+ARG GUI=OFF
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
@@ -39,8 +46,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-ARG PRUSASLICER_TAG=version_2.9.6
-
 WORKDIR /src
 RUN git clone --depth 1 --branch "${PRUSASLICER_TAG}" \
         https://github.com/prusa3d/PrusaSlicer.git
@@ -52,13 +57,18 @@ WORKDIR /src/PrusaSlicer/deps/build
 RUN cmake .. -DDEP_WX_GTK3=ON
 RUN make -j"$(nproc)"
 
-# Then PrusaSlicer itself.
+# Then PrusaSlicer itself. GUI=OFF only works up to 2.9.x; 3.0 refuses to configure
+# without a GUI ("Non-GUI build is not supported yet").
 WORKDIR /src/PrusaSlicer
 RUN mkdir -p build
 WORKDIR /src/PrusaSlicer/build
-RUN cmake .. -DSLIC3R_STATIC=1 -DSLIC3R_GTK=3 -DSLIC3R_PCH=OFF \
-        -DCMAKE_PREFIX_PATH=/src/PrusaSlicer/deps/build/destdir/usr/local
+RUN if [ "$GUI" = "ON" ]; then \
+        cmake .. -DSLIC3R_STATIC=1 -DSLIC3R_GTK=3 -DSLIC3R_PCH=OFF \
+            -DCMAKE_PREFIX_PATH=/src/PrusaSlicer/deps/build/destdir/usr/local; \
+    else \
+        cmake .. -DSLIC3R_GUI=OFF -DSLIC3R_STATIC=1 -DSLIC3R_PCH=OFF \
+            -DCMAKE_PREFIX_PATH=/src/PrusaSlicer/deps/build/destdir/usr/local; \
+    fi
 RUN make -j"$(nproc)"
 
-RUN /src/PrusaSlicer/build/src/prusa-slicer --help > /dev/null \
-    && echo "binary built and executable"
+RUN ./src/prusa-slicer --help > /dev/null && echo "binary built and executable"
